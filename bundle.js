@@ -133,11 +133,14 @@ const $ = require('jquery');
 const Config = require('./config.js');
 
 module.exports = function Sync() {
-  const ipfs = window.IpfsApi();
   const ipnsHash = 'QmNektv2ExBqgyoD6QcSH6M8B7PPDrjEVGjmSvQq9HV1Hf';
   const ipnsGateway = 'https://gateway.ipfs.io/ipns/' + ipnsHash;
   let ipfsHash;
   let config = new Config();
+
+  if (config.isLocal()) {
+    const ipfs = window.IpfsApi();
+  }
 
   return {
     getIpnsData: getIpnsData,
@@ -147,9 +150,9 @@ module.exports = function Sync() {
   };
 
   function getIpnsData() {
-    console.log('getDataDirect');
+    console.log('getIpnsData');
     return new Promise((resolve, reject) => {
-      $.get(ipns, onDataReceived);
+      $.get(ipnsGateway, onDataReceived);
 
       function onDataReceived(data) {
         console.log('$.get', data);
