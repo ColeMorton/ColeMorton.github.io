@@ -4,11 +4,17 @@ module.exports = function Config() {
     isLocal: isLocal,
     getCurrentHash: getCurrentHash
   };
-  
+
   return service;
 
   function isLocal() {
-    return getCurrentHash() === false;
+    if (window.location.origin === 'file://') {
+      return true;
+    }
+    if (window.location.hostname === 'localhost') {
+      return true;
+    }
+    return false;
   }
 
   function getCurrentHash() {
@@ -23,22 +29,75 @@ module.exports = function Config() {
 }
 },{}],2:[function(require,module,exports){
 const Config = require('./config.js');
-const Sync = require('./ipfs.js');
-const $ = require('jquery');
+const Ipfs = require('./ipfs.js');
 
-// let addr = 'https://gateway.ipfs.io/ipns/QmNektv2ExBqgyoD6QcSH6M8B7PPDrjEVGjmSvQq9HV1Hf/'; 
-// $.get(addr, function(data) {
-//     console.log(data);
-// });
+const db = low('db');
+db.setState({});
+
+var _ = require('underscore');
+var _db = require('underscore-db');
+_.mixin(_db);
+db._.mixin();
+
+db.defaults({ appInfo: [], items: [{ 'name': 'cole' }] }).value();
+
+const ipfs = new Ipfs();
+const config = new Config();
+
+function getState() {
+  return new Promise((resolve, reject) => {
+    if (config.isLocal) {
+      ipfs.getIpfsHash().then(ipfs.getIpfsData).then(onStateRecieved);
+    } else {
+      ipfs.getIpnsData().then(onStateRecieved);
+    }
+
+    function onStateRecieved(state) {
+      db.setState(state);
+      resolve(db.getState());
+    }
+  });
+}
+
+function add(tableName, entry) {
+  return new Promise((resolve, reject) => {
+    db.get(tableName)
+      .push(entry)
+      .value();
+
+    ipfs.set(db.getState()).then(() => {
+      resolve(db.getState());
+    });
+  });
+}
+
+function removeAll(tableName) {
+  return new Promise((resolve, reject) => {
+    let state = db.getState();
+    state[tableName] = [];
+    db.setState(state);
+
+    ipfs.set(db.getState()).then(() => {
+      resolve(db.getState());
+    });
+  });
+}
+
+module.exports = {
+  getState: getState,
+  add: add,
+  removeAll: removeAll
+};
+},{"./config.js":1,"./ipfs.js":4,"underscore":14,"underscore-db":13}],3:[function(require,module,exports){
+const Config = require('./config.js');
+const Items = require('./items.js');
 
 const app = new App();
 app.init();
 
 function App() {
-  let dataHash;
-  let appInfo;
   const config = new Config();
-  const sync = new Sync();
+  const items = new Items();
 
   return {
     init: init
@@ -47,106 +106,69 @@ function App() {
   function init() {
     document.onreadystatechange = () => {
       if (document.readyState === 'complete') {
-        document.getElementById('store').onclick = update;
+        document.getElementById('add').onclick = add;
         document.getElementById('default').onclick = defaultData;
       }
     };
 
-    if (!config.isLocal()) {
-      setAppInfo();
-    }
-
-    // sync.getDataDirect()
-    //   .then((json) => {
-    //     console.log(json);
-    //   });
-
-    sync.getDataDirect()
-      // .then(getData)
-      .then(onDataRecieved);
-
-    function setAppInfo() {
-      appInfo = {
-        appHash: config.getCurrentHash(),
-        appLink: 'https://ipfs.io/ipfs/' + config.getCurrentHash(),
-        timestamp: Date.now()
-      };
-    }
+    items.getAll().then(onItemsRecieved);
   }
 
-  function getData(hash) {
-    dataHash = hash;
-    document.getElementById('hash').innerText = dataHash;
-    return sync.getData(hash);
-  }
-
-  function onDataRecieved(data) {
-    if (data.info) {
-      console.log('Please edit from here: ', data.info.link);
-    }
-
-    document.getElementById('source').innerText = JSON.stringify(data);
-    sync.render();
+  function onItemsRecieved(items) {
+    document.getElementById('source').innerText = JSON.stringify(items);
   }
 
   function defaultData() {
-    document.getElementById('source').innerText = JSON.stringify({ appInfo: [], items: [] });
+    items.removeAll().then(onItemsRecieved);
   }
 
-  function update() {
-    let text = document.getElementById('source').value;
-    sync.set(text);
+  function add() {
+    let item = { 'name' : document.getElementById('name').value };
+    items.add(item).then(onItemsRecieved);
   }
 }
-},{"./config.js":1,"./ipfs.js":3,"jquery":9}],3:[function(require,module,exports){
+},{"./config.js":1,"./items.js":5}],4:[function(require,module,exports){
 (function (Buffer){
 const $ = require('jquery');
 const Config = require('./config.js');
 
 module.exports = function Sync() {
-  const ipfs = window.IpfsApi('/ip4/127.0.0.1/tcp/5001');
+  const ipfs = window.IpfsApi();
   const ipnsHash = 'QmNektv2ExBqgyoD6QcSH6M8B7PPDrjEVGjmSvQq9HV1Hf';
   const ipnsGateway = 'https://gateway.ipfs.io/ipns/' + ipnsHash;
   let ipfsHash;
   let config = new Config();
 
-  const db = low('db')
-  db.setState({});
-
-  var _ = require('underscore');
-  var _db = require('underscore-db');
-  _.mixin(_db);
-  db._.mixin();
-
-  db.defaults({ appInfo: [], items: [] }).value();
-
   return {
-    getDataDirect: getDataDirect,
-    getDataHash: getDataHash,
-    getData: getData,
-    set: set,
-    render: render
+    getIpnsData: getIpnsData,
+    getIpfsHash: getIpfsHash,
+    getIpfsData: getIpfsData,
+    set: set
   };
 
-  function getDataDirect() {
+  function getIpnsData() {
     console.log('getDataDirect');
     return new Promise((resolve, reject) => {
-      $.get(ipnsGateway, function (data) {
-        console.log('getDataDirect', data);
+      $.get(ipns, onDataReceived);
+
+      function onDataReceived(data) {
+        console.log('$.get', data);
         let json = JSON.parse(data);
         resolve(json);
-      });
+      }
     });
   }
 
-  function getDataHash() {
+  function getIpfsHash() {
+    console.log('getIpfsHash');
     return ipfs.name.resolve(ipnsHash).then((res) => {
       console.log('ipfs.name.resolve', res);
       return res.Path.substr(res.Path.lastIndexOf('/') + 1);
     });
   }
 
-  function getData(hash) {
+  function getIpfsData(hash) {
+    console.log('getIpfsData');
     return ipfs.cat(hash).then((stream) => {
       console.log('ipfs.cat', stream);
       var promise = new Promise((resolve, reject) => {
@@ -157,52 +179,80 @@ module.exports = function Sync() {
         } else {
           stream.on('data', function (chunk) {
             res += chunk.toString();
-          })
+          });
 
           stream.on('error', function (err) {
             console.error('Oh nooo', err);
-          })
+          });
 
           stream.on('end', function () {
             let json = JSON.parse(res);
             console.log('sync.getData success', json);
-            setState(json);
             resolve(json);
-          })
+          });
         }
       });
       return promise;
     });
   }
 
-  function set(string) {
-    let buffer = new Buffer(string);
+  function set(state) {
+    console.log('set', state);
+    let buffer = new Buffer(JSON.stringify(state));
 
-    ipfs.add(buffer, function (err, res) {
-      if (err || !res) return console.error("ipfs add error", err, res);
-      let file = res[0];
-      console.log('ipfs.add', file);
+    return new Promise((resolve, reject) => {
+      ipfs.add(buffer, (err, res) => {
+        if (err || !res) return console.error("ipfs add error", err, res);
+        console.log('ipfs.add', res);
+        let file = res[0];
 
-      ipfs.name.publish(file.path, (err, res) => {
-        console.log('ipfs.name.publish', res);
+        ipfs.name.publish(file.path, (err, res) => {
+          console.log('ipfs.name.publish', res);
+          resolve();
+        });
       });
     });
   }
-
-  function setState(json) {
-    db.setState(json);
-  }
-
-  function render() {
-    const state = db.getState()
-    const str = JSON.stringify(state, null, 2)
-    console.log('render', str);
-  }
 }
 }).call(this,require("buffer").Buffer)
-},{"./config.js":1,"buffer":5,"jquery":9,"underscore":12,"underscore-db":11}],4:[function(require,module,exports){
+},{"./config.js":1,"buffer":7,"jquery":11}],5:[function(require,module,exports){
+const $ = require('jquery');
+const Config = require('./config.js');
+const db = require('./db.js');
+let items;
 
-},{}],5:[function(require,module,exports){
+class Items {
+  constructor() {
+    this.tableName = 'items';
+    this.returnItems = returnItems;
+
+    function returnItems(state) {
+      return state.items;
+    }
+  }
+
+  getAll() {
+    return db.getState().then(this.returnItems);
+  }
+
+  add(item) {
+    return db.add(this.tableName, item).then(this.returnItems);
+  }
+
+  removeAll() {
+    return db.removeAll(this.tableName).then(this.returnItems);
+  }
+}
+
+module.exports = function() {
+  if (!items) {
+    items = new Items();
+  }
+  return items;
+};
+},{"./config.js":1,"./db.js":2,"jquery":11}],6:[function(require,module,exports){
+
+},{}],7:[function(require,module,exports){
 (function (global){
 /*!
  * The buffer module from node.js, for the browser.
@@ -1919,7 +1969,7 @@ function isnan (val) {
 }
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"base64-js":6,"ieee754":7,"isarray":8}],6:[function(require,module,exports){
+},{"base64-js":8,"ieee754":9,"isarray":10}],8:[function(require,module,exports){
 'use strict'
 
 exports.toByteArray = toByteArray
@@ -2030,7 +2080,7 @@ function fromByteArray (uint8) {
   return parts.join('')
 }
 
-},{}],7:[function(require,module,exports){
+},{}],9:[function(require,module,exports){
 exports.read = function (buffer, offset, isLE, mLen, nBytes) {
   var e, m
   var eLen = nBytes * 8 - mLen - 1
@@ -2116,14 +2166,14 @@ exports.write = function (buffer, value, offset, isLE, mLen, nBytes) {
   buffer[offset + i - d] |= s * 128
 }
 
-},{}],8:[function(require,module,exports){
+},{}],10:[function(require,module,exports){
 var toString = {}.toString;
 
 module.exports = Array.isArray || function (arr) {
   return toString.call(arr) == '[object Array]';
 };
 
-},{}],9:[function(require,module,exports){
+},{}],11:[function(require,module,exports){
 /*eslint-disable no-unused-vars*/
 /*!
  * jQuery JavaScript Library v3.1.0
@@ -12199,7 +12249,7 @@ if ( !noGlobal ) {
 return jQuery;
 } );
 
-},{}],10:[function(require,module,exports){
+},{}],12:[function(require,module,exports){
 // UUID
 // https://gist.github.com/LeverOne/1308368
 /* jshint ignore:start */
@@ -12314,7 +12364,7 @@ module.exports = {
   }
 };
 
-},{}],11:[function(require,module,exports){
+},{}],13:[function(require,module,exports){
 var fs = require('fs'),
   index = require('./');
 
@@ -12329,7 +12379,7 @@ index.load = function(source) {
 };
 
 module.exports = index;
-},{"./":10,"fs":4}],12:[function(require,module,exports){
+},{"./":12,"fs":6}],14:[function(require,module,exports){
 //     Underscore.js 1.8.3
 //     http://underscorejs.org
 //     (c) 2009-2015 Jeremy Ashkenas, DocumentCloud and Investigative Reporters & Editors
@@ -13879,4 +13929,4 @@ module.exports = index;
   }
 }.call(this));
 
-},{}]},{},[2]);
+},{}]},{},[3]);
