@@ -46,7 +46,7 @@ const config = new Config();
 
 function getState() {
   return new Promise((resolve, reject) => {
-    if (config.isLocal) {
+    if (config.isLocal()) {
       ipfs.getIpfsHash().then(ipfs.getIpfsData).then(onStateRecieved);
     } else {
       ipfs.getIpnsData().then(onStateRecieved);
